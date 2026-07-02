@@ -13,7 +13,6 @@
     <!-- Подключаем JSONBin API -->
     <script src="jsonbin-api.js"></script>
     <style>
-        /* Все стили из вашего кода админки */
         * {
             margin: 0;
             padding: 0;
@@ -921,7 +920,7 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Цена (₽) *</label>
+                        <label>Цена (Br) *</label>
                         <input type="number" id="productPrice" placeholder="8900">
                     </div>
                     <div class="form-group">
@@ -1013,7 +1012,6 @@
     // АДМИН-ПАНЕЛЬ С ИНТЕГРАЦИЕЙ JSONBin
     // ============================================
 
-    // ЕДИНЫЙ КЛЮЧ ДЛЯ ДАННЫХ (как на сайте)
     const PRODUCTS_KEY = 'aere_products';
     const USERS_KEY = 'aere_users';
     const ORDERS_KEY = 'aere_orders';
@@ -1029,29 +1027,31 @@
     let salesChart = null;
     let isLoading = false;
 
-    // --- ЗАГРУЗКА ДАННЫХ ---
+    // --- ЗАГРУЗКА ДАННЫХ (С ПРИОРИТЕТОМ LOCALSTORAGE) ---
     async function loadData() {
         showLoading(true);
         try {
-            // Сначала пробуем загрузить из JSONBin
+            // 1. Сначала загружаем из localStorage (быстрее и надёжнее)
+            loadFromLocalStorage();
+            
+            // 2. Пробуем обновить из JSONBin
             const data = await JSONBinAPI.getData();
             if (data) {
+                // Если есть данные в облаке, используем их
                 products = data.products || [];
                 users = data.users || [];
                 orders = data.orders || [];
                 notifications = data.notifications || [];
                 
-                // Сохраняем в localStorage с ЕДИНЫМИ ключами
-                localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
-                localStorage.setItem(USERS_KEY, JSON.stringify(users));
-                localStorage.setItem(ORDERS_KEY, JSON.stringify(orders));
-                localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
-                
+                // Сохраняем в localStorage
+                saveToLocalStorage();
                 console.log('✅ Данные загружены из JSONBin');
             } else {
-                // Если JSONBin не ответил, загружаем из localStorage
+                // Если облако пустое, загружаем из localStorage
                 loadFromLocalStorage();
-                console.warn('⚠️ Используем данные из localStorage');
+                // И отправляем данные в облако
+                await syncDataToCloud();
+                console.log('✅ Данные загружены из localStorage и отправлены в облако');
             }
         } catch (error) {
             console.error('❌ Ошибка загрузки данных:', error);
@@ -1072,14 +1072,31 @@
         users = savedUsers ? JSON.parse(savedUsers) : [];
         orders = savedOrders ? JSON.parse(savedOrders) : [];
         notifications = savedNotifications ? JSON.parse(savedNotifications) : [];
+        
+        // Убеждаемся, что админ есть
+        ensureAdminExists();
+        console.log('📦 Данные загружены из localStorage');
     }
 
-    // --- СОХРАНЕНИЕ В ЛОКАЛЬНОЕ ХРАНИЛИЩЕ ---
     function saveToLocalStorage() {
         localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
         localStorage.setItem(USERS_KEY, JSON.stringify(users));
         localStorage.setItem(ORDERS_KEY, JSON.stringify(orders));
         localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
+        console.log('💾 Данные сохранены в localStorage');
+    }
+
+    // --- СИНХРОНИЗАЦИЯ С ОБЛАКОМ ---
+    async function syncDataToCloud() {
+        try {
+            await JSONBinAPI.syncProducts(products);
+            await JSONBinAPI.syncUsers(users);
+            await JSONBinAPI.syncOrders(orders);
+            await JSONBinAPI.syncNotifications(notifications);
+            console.log('☁️ Данные отправлены в JSONBin');
+        } catch (error) {
+            console.error('❌ Ошибка отправки в JSONBin:', error);
+        }
     }
 
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -1113,7 +1130,6 @@
                 registeredAt: new Date().toLocaleString()
             });
             saveToLocalStorage();
-            JSONBinAPI.syncUsers(users);
         }
     }
 
@@ -1142,7 +1158,7 @@
                 <td><strong>${product.name}</strong><br><small>${product.desc || ''}</small></td>
                 <td>${product.typeName || product.type}</td>
                 <td>${product.genderName || product.gender}</td>
-                <td>${(product.price || 0).toLocaleString()} ₽</td>
+                <td>${(product.price || 0).toLocaleString()} Br</td>
                 <td class="action-buttons">
                     <button class="edit-btn" onclick="editProduct(${product.id})"><i class="fas fa-edit"></i></button>
                     <button class="delete-btn" onclick="confirmDelete('product', ${product.id})"><i class="fas fa-trash"></i></button>
@@ -1157,31 +1173,33 @@
         const tbody = document.getElementById('usersTableBody');
         if (!tbody) return;
         
-        const filteredUsers = users.filter(u => u.email !== 'admin@aere.com');
-        if (filteredUsers.length === 0) {
+        // Показываем всех пользователей, включая админа
+        const allUsers = users;
+        if (allUsers.length === 0) {
             tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted);">Нет зарегистрированных пользователей</td></tr>';
             document.getElementById('totalUsers').textContent = '0';
             return;
         }
         
-        tbody.innerHTML = filteredUsers.map((user, index) => {
+        tbody.innerHTML = allUsers.map((user, index) => {
             const userOrdersCount = orders.filter(o => o.userEmail === user.email).length;
+            const isAdmin = user.email === 'admin@aere.com';
             return `
                 <tr>
                     <td>${user.id || index + 1}</td>
-                    <td>${user.name}</td>
+                    <td>${user.name} ${isAdmin ? '⭐' : ''}</td>
                     <td>${user.email}</td>
                     <td class="password-cell">${user.password}</td>
                     <td>${user.registeredAt || 'Не указана'}</td>
                     <td>${userOrdersCount}</td>
                     <td class="action-buttons">
-                        <button class="delete-btn" onclick="confirmDelete('user', '${user.email}')"><i class="fas fa-trash"></i></button>
+                        ${!isAdmin ? `<button class="delete-btn" onclick="confirmDelete('user', '${user.email}')"><i class="fas fa-trash"></i></button>` : '<span style="color:var(--text-muted);font-size:0.7rem;">Админ</span>'}
                     </td>
                 </tr>
             `;
         }).join('');
         
-        document.getElementById('totalUsers').textContent = filteredUsers.length;
+        document.getElementById('totalUsers').textContent = allUsers.length;
     }
 
     function updateStatistics() {
@@ -1193,7 +1211,7 @@
         });
         
         document.getElementById('totalOrders').textContent = totalOrdersCount;
-        document.getElementById('totalRevenue').textContent = totalRevenue.toLocaleString() + ' ₽';
+        document.getElementById('totalRevenue').textContent = totalRevenue.toLocaleString() + ' Br';
         
         updateChart();
     }
@@ -1217,7 +1235,7 @@
             data: {
                 labels: months,
                 datasets: [{
-                    label: 'Выручка (₽)',
+                    label: 'Выручка (Br)',
                     data: salesData,
                     borderColor: '#b47c5e',
                     backgroundColor: 'rgba(180, 124, 94, 0.1)',
@@ -1268,10 +1286,8 @@
         };
         products.push(newProduct);
         
-        // Сохраняем в localStorage
         saveToLocalStorage();
-        // Сохраняем в JSONBin
-        await JSONBinAPI.syncProducts(products);
+        await syncDataToCloud();
         
         updateProductsTable();
         showToast('✅ Товар успешно добавлен');
@@ -1288,7 +1304,7 @@
             };
             
             saveToLocalStorage();
-            await JSONBinAPI.syncProducts(products);
+            await syncDataToCloud();
             
             updateProductsTable();
             showToast('✅ Товар успешно обновлён');
@@ -1299,17 +1315,21 @@
         products = products.filter(p => p.id !== id);
         
         saveToLocalStorage();
-        await JSONBinAPI.syncProducts(products);
+        await syncDataToCloud();
         
         updateProductsTable();
         showToast('✅ Товар удалён');
     }
 
     async function deleteUser(email) {
+        if (email === 'admin@aere.com') {
+            showToast('❌ Нельзя удалить администратора');
+            return;
+        }
         users = users.filter(u => u.email !== email);
         
         saveToLocalStorage();
-        await JSONBinAPI.syncUsers(users);
+        await syncDataToCloud();
         
         updateUsersTable();
         showToast('✅ Пользователь удалён');
@@ -1364,27 +1384,53 @@
         notifications.unshift(notification);
         
         saveToLocalStorage();
-        await JSONBinAPI.syncNotifications(notifications);
+        await syncDataToCloud();
         
         updateNotificationHistory();
-        
-        // Сохраняем уведомления для пользователей
-        const allNotifications = JSON.parse(localStorage.getItem('notifications')) || {};
-        users.forEach(user => {
-            if (user.email !== 'admin@aere.com') {
-                if (!allNotifications[user.email]) allNotifications[user.email] = [];
-                allNotifications[user.email].push({
-                    id: notification.id,
-                    title: title,
-                    message: message,
-                    date: notification.date,
-                    read: false
-                });
-            }
-        });
-        localStorage.setItem('notifications', JSON.stringify(allNotifications));
-        
         showToast(`✅ Уведомление отправлено ${notification.sentTo} пользователям`);
+    }
+
+    // --- СИНХРОНИЗАЦИЯ ---
+    async function syncWithCloud() {
+        showLoading(true);
+        try {
+            // Получаем данные из облака
+            const data = await JSONBinAPI.getData();
+            if (data) {
+                // Объединяем данные (сохраняем всё, что есть в локальном хранилище)
+                const cloudProducts = data.products || [];
+                const cloudUsers = data.users || [];
+                const cloudOrders = data.orders || [];
+                const cloudNotifications = data.notifications || [];
+                
+                // Объединяем: локальные данные имеют приоритет
+                // (чтобы не потерять новых пользователей)
+                const mergedProducts = [...cloudProducts, ...products];
+                const mergedUsers = [...cloudUsers, ...users];
+                const mergedOrders = [...cloudOrders, ...orders];
+                const mergedNotifications = [...cloudNotifications, ...notifications];
+                
+                // Удаляем дубликаты по id
+                products = mergedProducts.filter((p, i, arr) => arr.findIndex(x => x.id === p.id) === i);
+                users = mergedUsers.filter((u, i, arr) => arr.findIndex(x => x.email === u.email) === i);
+                orders = mergedOrders;
+                notifications = mergedNotifications;
+                
+                saveToLocalStorage();
+                await syncDataToCloud();
+                updateAllUI();
+                showToast('✅ Данные успешно синхронизированы!');
+            } else {
+                // Если облако пустое, отправляем туда данные
+                await syncDataToCloud();
+                showToast('✅ Данные отправлены в облако!');
+            }
+        } catch (error) {
+            showToast('❌ Ошибка синхронизации');
+            console.error(error);
+        } finally {
+            showLoading(false);
+        }
     }
 
     // --- АВТОРИЗАЦИЯ ---
@@ -1422,36 +1468,6 @@
         } else {
             document.getElementById('loginPage').style.display = 'flex';
             document.getElementById('adminWrapper').classList.remove('show');
-        }
-    }
-
-    // --- СИНХРОНИЗАЦИЯ С ОБЛАКОМ ---
-    async function syncWithCloud() {
-        showLoading(true);
-        try {
-            // Загружаем свежие данные из облака
-            const data = await JSONBinAPI.getData();
-            if (data) {
-                products = data.products || [];
-                users = data.users || [];
-                orders = data.orders || [];
-                notifications = data.notifications || [];
-                saveToLocalStorage();
-                updateAllUI();
-                showToast('✅ Данные успешно синхронизированы с облаком!');
-            } else {
-                // Если облако пустое, отправляем туда данные
-                await JSONBinAPI.syncProducts(products);
-                await JSONBinAPI.syncUsers(users);
-                await JSONBinAPI.syncOrders(orders);
-                await JSONBinAPI.syncNotifications(notifications);
-                showToast('✅ Данные отправлены в облако!');
-            }
-        } catch (error) {
-            showToast('❌ Ошибка синхронизации');
-            console.error(error);
-        } finally {
-            showLoading(false);
         }
     }
 
@@ -1504,7 +1520,7 @@
     async function init() {
         loadTheme();
         
-        // Загружаем пользователей
+        // Загружаем пользователей из localStorage
         const savedUsers = localStorage.getItem(USERS_KEY);
         if (savedUsers) {
             users = JSON.parse(savedUsers);
