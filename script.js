@@ -574,7 +574,8 @@ ${itemsList}
 🕐 Дата: ${new Date().toLocaleString()}`;
 
     const encodedMessage = encodeURIComponent(message);
-    const telegramUrl = `https://t.me/order_101?text=${encodedMessage}`;
+    const telegramUrl = `https://t.me/AERE_RU?text=${encodedMessage}`;
+    
     window.open(telegramUrl, '_blank');
     return true;
 }
